@@ -101,8 +101,13 @@
 {
     if (![_animatedImage isEqual:animatedImage]) {
         if (animatedImage) {
-            // Clear out the image.
-            super.image = nil;
+            if (super.image) {
+                // We need to apply an arbitrary UIImageOrientationUp image to ensure this view's internal state is correct.
+                // Otherwise some animated image will be rendered in wrong orientation, see https://github.com/Flipboard/FLAnimatedImage/issues/100
+                super.image = [UIImage imageWithCGImage:super.image.CGImage scale:1.0 orientation:UIImageOrientationUp];
+                // Clear out the image.
+                super.image = nil;
+            }
             // Ensure disabled highlighting; it's not supported (see `-setHighlighted:`).
             super.highlighted = NO;
             // UIImageView seems to bypass some accessors when calculating its intrinsic content size, so this ensures its intrinsic content size comes from the animated image.
@@ -301,7 +306,13 @@ static NSUInteger gcd(NSUInteger a, NSUInteger b)
         // Note: The display link's `.frameInterval` value of 1 (default) means getting callbacks at the refresh rate of the display (~60Hz).
         // Setting it to 2 divides the frame rate by 2 and hence calls back at every other display refresh.
         const NSTimeInterval kDisplayRefreshRate = 60.0; // 60Hz
-        self.displayLink.frameInterval = MAX([self frameDelayGreatestCommonDivisor] * kDisplayRefreshRate, 1);
+        NSInteger frameInterval = MAX([self frameDelayGreatestCommonDivisor] * kDisplayRefreshRate, 1);
+        if (@available(iOS 10, *)) {//after iOS 10(.x) frameInterval should be divided with no remainder, or using preferredFramesPerSecond(but still has some problem.)
+            NSInteger fixedInterval = gcd(kDisplayRefreshRate, frameInterval);
+            self.displayLink.frameInterval = fixedInterval;
+        } else {
+            self.displayLink.frameInterval = frameInterval;
+        }
 
         self.displayLink.paused = NO;
     } else {
@@ -375,7 +386,7 @@ static NSUInteger gcd(NSUInteger a, NSUInteger b)
     
     NSNumber *delayTimeNumber = [self.animatedImage.delayTimesForIndexes objectForKey:@(self.currentFrameIndex)];
     // If we don't have a frame delay (e.g. corrupt frame), don't update the view but skip the playhead to the next frame (in else-block).
-    if (delayTimeNumber) {
+    if (delayTimeNumber != nil) {
         NSTimeInterval delayTime = [delayTimeNumber floatValue];
         // If we have a nil image (e.g. waiting for frame), don't update the view nor playhead.
         UIImage *image = [self.animatedImage imageLazilyCachedAtIndex:self.currentFrameIndex];

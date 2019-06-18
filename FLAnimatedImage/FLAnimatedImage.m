@@ -228,7 +228,12 @@ static NSHashTable *allAnimatedImagesWeak;
         //     };
         // }
         NSDictionary *imageProperties = (__bridge_transfer NSDictionary *)CGImageSourceCopyProperties(_imageSource, NULL);
-        _loopCount = [[[imageProperties objectForKey:(id)kCGImagePropertyGIFDictionary] objectForKey:(id)kCGImagePropertyGIFLoopCount] unsignedIntegerValue];
+        id loopCount = [[imageProperties objectForKey:(id)kCGImagePropertyGIFDictionary] objectForKey:(id)kCGImagePropertyGIFLoopCount];
+        if (loopCount && [loopCount unsignedIntegerValue] == 0) {
+            _loopCount = 0;
+        } else {
+            _loopCount = [loopCount unsignedIntegerValue] + 1;
+        }
         
         // Iterate through frame images
         size_t imageCount = CGImageSourceGetCount(_imageSource);
@@ -298,8 +303,9 @@ static NSHashTable *allAnimatedImagesWeak;
                     }
                     CFRelease(frameImageRef);
                 } else {
+                    __weak typeof(self) weakSelf = self;
                     skippedFrameCount++;
-                    FLLog(FLLogLevelInfo, @"Dropping frame %zu because failed to `CGImageSourceCreateImageAtIndex` with image source %@", i, _imageSource);
+                    FLLog(FLLogLevelInfo, @"Dropping frame %zu because failed to `CGImageSourceCreateImageAtIndex` with image source %@", i, weakSelf.imageSource);
                 }
             }
         }
@@ -320,10 +326,12 @@ static NSHashTable *allAnimatedImagesWeak;
         if (optimalFrameCacheSize == 0) {
             // Calculate the optimal frame cache size: try choosing a larger buffer window depending on the predicted image size.
             // It's only dependent on the image size & number of frames and never changes.
-            CGFloat animatedImageDataSize = CGImageGetBytesPerRow(self.posterImage.CGImage) * self.size.height * (self.frameCount - skippedFrameCount) / MEGABYTE;
+            CGFloat animatedImageDataSizePerFrame = CGImageGetBytesPerRow(self.posterImage.CGImage) * self.size.height / MEGABYTE;
+            CGFloat animatedImageDataSize = animatedImageDataSizePerFrame * (self.frameCount - skippedFrameCount);
             if (animatedImageDataSize <= FLAnimatedImageDataSizeCategoryAll) {
                 _frameCacheSizeOptimal = self.frameCount;
-            } else if (animatedImageDataSize <= FLAnimatedImageDataSizeCategoryDefault) {
+            } else if (animatedImageDataSize <= FLAnimatedImageDataSizeCategoryDefault ||
+                       animatedImageDataSizePerFrame * FLAnimatedImageFrameCacheSizeDefault <= FLAnimatedImageDataSizeCategoryAll) {
                 // This value doesn't depend on device memory much because if we're not keeping all frames in memory we will always be decoding 1 frame up ahead per 1 frame that gets played and at this point we might as well just keep a small buffer just large enough to keep from running out of frames.
                 _frameCacheSizeOptimal = FLAnimatedImageFrameCacheSizeDefault;
             } else {
@@ -695,10 +703,10 @@ static NSHashTable *allAnimatedImagesWeak;
     // Create our own graphics context to draw to; `UIGraphicsGetCurrentContext`/`UIGraphicsBeginImageContextWithOptions` doesn't create a new context but returns the current one which isn't thread-safe (e.g. main thread could use it at the same time).
     // Note: It's not worth caching the bitmap context for multiple frames ("unique key" would be `width`, `height` and `hasAlpha`), it's ~50% slower. Time spent in libRIP's `CGSBlendBGRA8888toARGB8888` suddenly shoots up -- not sure why.
     CGContextRef bitmapContextRef = CGBitmapContextCreate(data, width, height, bitsPerComponent, bytesPerRow, colorSpaceDeviceRGBRef, bitmapInfo);
-    CGColorSpaceRelease(colorSpaceDeviceRGBRef);
     // Early return on failure!
     if (!bitmapContextRef) {
         FLLog(FLLogLevelError, @"Failed to `CGBitmapContextCreate` with color space %@ and parameters (width: %zu height: %zu bitsPerComponent: %zu bytesPerRow: %zu) for image %@", colorSpaceDeviceRGBRef, width, height, bitsPerComponent, bytesPerRow, imageToPredraw);
+        CGColorSpaceRelease(colorSpaceDeviceRGBRef);
         return imageToPredraw;
     }
     
@@ -706,14 +714,19 @@ static NSHashTable *allAnimatedImagesWeak;
     CGContextDrawImage(bitmapContextRef, CGRectMake(0.0, 0.0, imageToPredraw.size.width, imageToPredraw.size.height), imageToPredraw.CGImage);
     CGImageRef predrawnImageRef = CGBitmapContextCreateImage(bitmapContextRef);
     UIImage *predrawnImage = [UIImage imageWithCGImage:predrawnImageRef scale:imageToPredraw.scale orientation:imageToPredraw.imageOrientation];
-    CGImageRelease(predrawnImageRef);
-    CGContextRelease(bitmapContextRef);
     
     // Early return on failure!
     if (!predrawnImage) {
         FLLog(FLLogLevelError, @"Failed to `imageWithCGImage:scale:orientation:` with image ref %@ created with color space %@ and bitmap context %@ and properties and properties (scale: %f orientation: %ld) for image %@", predrawnImageRef, colorSpaceDeviceRGBRef, bitmapContextRef, imageToPredraw.scale, (long)imageToPredraw.imageOrientation, imageToPredraw);
+        CGColorSpaceRelease(colorSpaceDeviceRGBRef);
+        CGImageRelease(predrawnImageRef);
+        CGContextRelease(bitmapContextRef);
         return imageToPredraw;
     }
+    
+    CGColorSpaceRelease(colorSpaceDeviceRGBRef);
+    CGImageRelease(predrawnImageRef);
+    CGContextRelease(bitmapContextRef);
     
     return predrawnImage;
 }
