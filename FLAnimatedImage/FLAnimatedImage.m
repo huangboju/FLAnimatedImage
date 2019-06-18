@@ -227,12 +227,11 @@ static NSHashTable *allAnimatedImagesWeak;
         //         LoopCount = 0;
         //     };
         // }
-        NSDictionary *imageProperties = (__bridge_transfer NSDictionary *)CGImageSourceCopyProperties(_imageSource, NULL);
-        id loopCount = [[imageProperties objectForKey:(id)kCGImagePropertyGIFDictionary] objectForKey:(id)kCGImagePropertyGIFLoopCount];
-        if (loopCount && [loopCount unsignedIntegerValue] == 0) {
-            _loopCount = 0;
+        id loopCountObj = [[imageProperties objectForKey:(id)kCGImagePropertyGIFDictionary] objectForKey:(id)kCGImagePropertyGIFLoopCount];
+        if ([loopCountObj respondsToSelector:@selector(unsignedIntegerValue)]) {
+            _loopCount = [loopCountObj unsignedIntegerValue];
         } else {
-            _loopCount = [loopCount unsignedIntegerValue] + 1;
+            _loopCount = 1;
         }
         
         // Iterate through frame images
